@@ -49,8 +49,12 @@ namespace Stride.VirtualReality
         private unsafe delegate Result pfnGetD3D11GraphicsRequirementsKHR(Instance instance, ulong sys_id, GraphicsRequirementsD3D11KHR* req);
 #endif
 
+        private unsafe delegate Result pfnxrCreateHandTrackerEXT(Session session, HandTrackerCreateInfoEXT* createInfo, HandTrackerEXT* handTracker);
+        private unsafe delegate Result pfnxrLocateHandJointsEXT(HandTrackerEXT handTracker, HandJointsLocateInfoEXT* locateInfo, HandJointLocationsEXT* locations);
         private unsafe delegate Result pfnCreateDebugUtilsMessengerEXT(Instance instance, DebugUtilsMessengerCreateInfoEXT* createInfo, DebugUtilsMessengerEXT* messenger);
         private unsafe delegate Result pfnDestroyDebugUtilsMessengerEXT(DebugUtilsMessengerEXT messenger);
+
+        private Delegate locateHandJointsEXT;
 
         private List<string> Extensions = new List<string>();
         internal bool begunFrame, swapImageCollected;
@@ -112,6 +116,10 @@ namespace Stride.VirtualReality
 
         public override TrackedItem[] TrackedItems => null;
 
+
+        private HandTrackerEXT leftHandTracker = new HandTrackerEXT();
+        private HandTrackerEXT rightHandTracker = new HandTrackerEXT();
+
         public OpenXRHmd(GraphicsDevice gd)
         {
             //baseDevice = gd;
@@ -150,7 +158,7 @@ namespace Stride.VirtualReality
             PrintApiLayers();
 
 
-            Logger.Debug("Installing extensions");
+            Logger.Warning("Installing extensions");
 
             Extensions.Clear();
 #if STRIDE_GRAPHICS_API_DIRECT3D11
@@ -163,6 +171,7 @@ namespace Stride.VirtualReality
             //Extensions.Add("XR_HTC_vive_cosmos_controller_interaction");
             //Extensions.Add("XR_MSFT_hand_interaction");
             //Extensions.Add("XR_EXT_samsung_odyssey_controller");
+            Extensions.Add("XR_EXT_hand_tracking");
 
             uint propCount = 0;
             Xr.EnumerateInstanceExtensionProperties((byte*)null, 0, &propCount, null);
@@ -175,14 +184,14 @@ namespace Stride.VirtualReality
             }
             Xr.EnumerateInstanceExtensionProperties((byte*)null, propCount, &propCount, props);
 
-            Logger.Debug("Supported extensions (" + propCount + "):");
+            Logger.Warning("Supported extensions (" + propCount + "):");
             List<string> AvailableExtensions = new List<string>();
             for (int i = 0; i < props.Length; i++)
             {
                 fixed (void* nptr = props[i].ExtensionName)
                 {
                     var extension_name = Marshal.PtrToStringAnsi(new System.IntPtr(nptr));
-                    Logger.Debug(extension_name);
+                    Logger.Warning(extension_name);
                     AvailableExtensions.Add(extension_name);
                 }
             }
@@ -196,8 +205,14 @@ namespace Stride.VirtualReality
                 }
             }
 
+            Logger.Warning("Available extensions of those enabled");
+            for (int i = 0; i < Extensions.Count; i++)
+            {
+                Logger.Warning(Extensions[i]);
+            }
+
 #if STRIDE_GRAPHICS_API_DIRECT3D11
-            if (!AvailableExtensions.Contains("XR_KHR_D3D11_enable"))
+                if (!AvailableExtensions.Contains("XR_KHR_D3D11_enable"))
             {
                 throw new InvalidOperationException($"OpenXR error! Current implementation doesn't support directX 11");
             }
@@ -271,26 +286,33 @@ namespace Stride.VirtualReality
             // supports that form factor. The response we get is a ulong that is the System ID.
             var getInfo = new SystemGetInfo(formFactor: FormFactor.HeadMountedDisplay) { Type = StructureType.TypeSystemGetInfo };
             CheckResult(Xr.GetSystem(Instance, in getInfo, ref system_id), "GetSystem");
-            Logger.Debug("Successfully got XrSystem with id " + system_id + " for HMD form factor");
+            Logger.Warning("Successfully got XrSystem with id " + system_id + " for HMD form factor");
 
+
+            SystemHandTrackingPropertiesEXT hand_tracking_props = new SystemHandTrackingPropertiesEXT()
+            {
+                Type = StructureType.TypeSystemHandTrackingPropertiesExt,
+                Next = null,
+                SupportsHandTracking = 0,
+            };
             SystemProperties system_props = new SystemProperties()
             {
                 Type = StructureType.TypeSystemProperties,
-                Next = null,
+                Next = &hand_tracking_props,
             };
-
-            // CheckResult(Xr.GetSystemProperties(Instance, system_id, &system_props), "GetSystemProperties");
+            CheckResult(Xr.GetSystemProperties(Instance, system_id, &system_props), "GetSystemProperties");
+            Logger.Warning("Supports hand tracking: " + hand_tracking_props.SupportsHandTracking);
 
             uint view_config_count = 0;
             CheckResult(Xr.EnumerateViewConfiguration(Instance, system_id, 0, ref view_config_count, null), "EnumerateViewConfiguration");
             var viewconfigs = new ViewConfigurationType[view_config_count];
             fixed (ViewConfigurationType* viewconfigspnt = &viewconfigs[0])
                 CheckResult(Xr.EnumerateViewConfiguration(Instance, system_id, view_config_count, ref view_config_count, viewconfigspnt), "EnumerateViewConfiguration");
-            Logger.Debug("Available config types: ");
+            Logger.Warning("Available config types: ");
             var viewtype_found = false;
             for (int i = 0; i < view_config_count; i++)
             {
-                Logger.Debug("    " + viewconfigs[i]);
+                Logger.Warning("    " + viewconfigs[i]);
                 viewtype_found |= view_type == viewconfigs[i];
             }
             if (!viewtype_found)
@@ -314,7 +336,7 @@ namespace Stride.VirtualReality
             renderSize.Height = (int)Math.Round(viewconfig_views[0].RecommendedImageRectHeight * RenderFrameScaling);
 
 #if STRIDE_GRAPHICS_API_DIRECT3D11
-            Logger.Debug(
+            Logger.Warning(
                 "Initializing DX11 graphics device: "
             );
             GraphicsRequirementsD3D11KHR dx11 = new GraphicsRequirementsD3D11KHR()
@@ -327,8 +349,8 @@ namespace Stride.VirtualReality
             // this function pointer was loaded with xrGetInstanceProcAddr
             Delegate dx11_req = Marshal.GetDelegateForFunctionPointer((IntPtr)xrGetD3D11GraphicsRequirementsKHR.Handle, typeof(pfnGetD3D11GraphicsRequirementsKHR));
             dx11_req.DynamicInvoke(Instance, system_id, new System.IntPtr(&dx11));
-            Logger.Debug("Initializing dx11 graphics device");
-            Logger.Debug(
+            Logger.Warning("Initializing dx11 graphics device");
+            Logger.Warning(
                 "DX11 device luid: " + dx11.AdapterLuid
                 + " min feature level: " + dx11.MinFeatureLevel
             );
@@ -398,7 +420,7 @@ namespace Stride.VirtualReality
             {
                 var texture = new SharpDX.Direct3D11.Texture2D((IntPtr)images[i].Texture);
                 var color_desc = texture.Description;
-                Logger.Debug("Color texture description: " + color_desc.Width.ToString() + "x" + color_desc.Height.ToString() + " format: " + color_desc.Format.ToString());
+                Logger.Warning("Color texture description: " + color_desc.Width.ToString() + "x" + color_desc.Height.ToString() + " format: " + color_desc.Format.ToString());
 
                 var target_desc = new SharpDX.Direct3D11.RenderTargetViewDescription()
                 {
@@ -480,6 +502,37 @@ namespace Stride.VirtualReality
                 Next = null,
             };
             Xr.StringToPath(Instance, "/user/hand/left", ref leftHandPath);
+
+
+            Silk.NET.Core.PfnVoidFunction xrCreateHandTrackerEXT = new Silk.NET.Core.PfnVoidFunction();
+            CheckResult(Xr.GetInstanceProcAddr(Instance, "xrCreateHandTrackerEXT", ref xrCreateHandTrackerEXT), "GetInstanceProcAddr::xrCreateHandTrackerEXT");
+            Delegate hand_tracker = Marshal.GetDelegateForFunctionPointer((IntPtr)xrCreateHandTrackerEXT.Handle, typeof(pfnxrCreateHandTrackerEXT));
+
+            HandTrackerCreateInfoEXT left_hand_tracker_create_info = new HandTrackerCreateInfoEXT()
+            {
+                Type = StructureType.TypeHandTrackerCreateInfoExt,
+                Next = null,
+                Hand = HandEXT.HandLeftExt,
+                HandJointSet = HandJointSetEXT.HandJointSetDefaultExt,
+            };
+            HandTrackerEXT left_hand_tracker = new HandTrackerEXT();
+            hand_tracker.DynamicInvoke(session, new IntPtr(&left_hand_tracker_create_info), new IntPtr(&left_hand_tracker));
+            leftHandTracker = left_hand_tracker;
+
+            HandTrackerCreateInfoEXT right_hand_tracker_create_info = new HandTrackerCreateInfoEXT()
+            {
+                Type = StructureType.TypeHandTrackerCreateInfoExt,
+                Next = null,
+                Hand = HandEXT.HandRightExt,
+                HandJointSet = HandJointSetEXT.HandJointSetDefaultExt,
+            };
+            HandTrackerEXT right_hand_tracker = new HandTrackerEXT();
+            hand_tracker.DynamicInvoke(session, new IntPtr(&right_hand_tracker_create_info), new IntPtr(&right_hand_tracker));
+            rightHandTracker = right_hand_tracker;
+
+            Silk.NET.Core.PfnVoidFunction xrLocateHandJointsEXT = new Silk.NET.Core.PfnVoidFunction();
+            CheckResult(Xr.GetInstanceProcAddr(Instance, "xrLocateHandJointsEXT", ref xrLocateHandJointsEXT), "GetInstanceProcAddr::xrLocateHandJointsEXT");
+            locateHandJointsEXT = Marshal.GetDelegateForFunctionPointer((IntPtr)xrCreateHandTrackerEXT.Handle, typeof(pfnxrLocateHandJointsEXT));
         }
 
         private void EndNullFrame()
@@ -676,7 +729,7 @@ namespace Stride.VirtualReality
 
         public override void SetTrackingSpace(TrackingSpace space)
         {
-            Logger.Debug("Changing tracking space to: " + space);
+            Logger.Warning("Changing tracking space to: " + space);
             switch (space) {
                 case TrackingSpace.Seated:
                     play_space_type = ReferenceSpaceType.Local;
@@ -741,7 +794,7 @@ namespace Stride.VirtualReality
             if (count == 0)
             {
 
-                Logger.Debug("No API Layers");
+                Logger.Warning("No API Layers");
                 return;
             }
 
@@ -754,12 +807,12 @@ namespace Stride.VirtualReality
 
             CheckResult(Xr.EnumerateApiLayerProperties(count, &count, props), "EnumerateApiLayerProperties");
 
-            Logger.Debug("API Layers:");
+            Logger.Warning("API Layers:");
             for (uint i = 0; i < count; i++)
             {
                 fixed (void* nptr = props[i].LayerName)
                 fixed (void* dptr = props[i].Description)
-                    Logger.Debug(
+                    Logger.Warning(
                         Marshal.PtrToStringAnsi(new System.IntPtr(nptr))
                         + " "
                         + props[i].LayerVersion
@@ -771,27 +824,27 @@ namespace Stride.VirtualReality
 
         private unsafe void PrintSystemProperties(SystemProperties system_properties)
         {
-            Logger.Debug(
+            Logger.Warning(
                 "System properties: "
                 + Marshal.PtrToStringAnsi(new System.IntPtr(system_properties.SystemName))
                 + ", vendor: "
                 + Marshal.PtrToStringAnsi(new System.IntPtr(system_properties.VendorId))
             );
-            Logger.Debug(
+            Logger.Warning(
                 "Max layers: "
                 + system_properties.GraphicsProperties.MaxLayerCount
             );
-            Logger.Debug(
+            Logger.Warning(
                 "Max swapchain size: "
                 + system_properties.GraphicsProperties.MaxSwapchainImageWidth
                 + "x"
                 + system_properties.GraphicsProperties.MaxSwapchainImageHeight
             );
-            Logger.Debug(
+            Logger.Warning(
                 "Orientation Tracking: "
                 + system_properties.TrackingProperties.OrientationTracking
             );
-            Logger.Debug(
+            Logger.Warning(
                 "tPosition Tracking: "
                 + system_properties.TrackingProperties.PositionTracking
             );
@@ -801,13 +854,13 @@ namespace Stride.VirtualReality
         {
             foreach (var viewconfig_view in viewconfig_views)
             {
-                Logger.Debug("View Configuration View:");
-                Logger.Debug(
+                Logger.Warning("View Configuration View:");
+                Logger.Warning(
                     "Resolution: Recommended "
                     + viewconfig_view.RecommendedImageRectWidth + "x" + viewconfig_view.RecommendedImageRectHeight
                     + " Max: " + viewconfig_view.MaxImageRectWidth + "x" + viewconfig_view.MaxImageRectHeight
                 );
-                Logger.Debug(
+                Logger.Warning(
                     "Swapchain Samples: Recommended"
                     + viewconfig_view.RecommendedSwapchainSampleCount
                     + " Max: " + viewconfig_view.MaxSwapchainSampleCount
@@ -953,7 +1006,7 @@ namespace Stride.VirtualReality
                     case StructureType.TypeEventDataSessionStateChanged:
                         {
                             var session_event = Unsafe.As<EventDataBuffer, EventDataSessionStateChanged>(ref runtime_event);
-                            Logger.Debug("EVENT: session state changed " + state + " -> " + session_event.State);
+                            Logger.Warning("EVENT: session state changed " + state + " -> " + session_event.State);
                             state = session_event.State;
                             switch (session_event.State)
                             {
@@ -1002,17 +1055,17 @@ namespace Stride.VirtualReality
                         }
                     case StructureType.TypeEventDataInteractionProfileChanged:
                         {
-                            Logger.Debug("EVENT: interaction profile changed");
+                            Logger.Warning("EVENT: interaction profile changed");
                             var profile_changed_event = Unsafe.As<EventDataBuffer, EventDataInteractionProfileChanged>(ref runtime_event);
                             CheckResult(Xr.GetCurrentInteractionProfile(profile_changed_event.Session, leftHandPath, ref handProfileState), "GetCurrentInteractionProfile");
-                            Logger.Debug(
+                            Logger.Warning(
                                 "Profile changed to" + handProfileState.InteractionProfile.ToString()
                             );
                             break;
                         }
                     default:
                         {
-                            Logger.Debug("EVENT: other type: " + runtime_event.Type);
+                            Logger.Warning("EVENT: other type: " + runtime_event.Type);
                             break;
                         }
                 }
@@ -1041,6 +1094,30 @@ namespace Stride.VirtualReality
 
             leftHand.Update(gameTime);
             rightHand.Update(gameTime);
+
+            HandJointsLocateInfoEXT hand_joints_locate_info = new HandJointsLocateInfoEXT()
+            {
+                Type = StructureType.TypeHandJointsLocateInfoExt,
+                Next = null,
+                BaseSpace = globalPlaySpace,
+                Time = globalFrameState.PredictedDisplayTime,
+            };
+            HandJointLocationEXT[] joint_locations = new HandJointLocationEXT[26];
+            fixed (HandJointLocationEXT* joint_locations_ptr = joint_locations)
+            {
+                HandJointLocationsEXT hand_joint_locations = new HandJointLocationsEXT()
+                {
+                    Type = StructureType.TypeHandJointLocationsExt,
+                    Next = null,
+                    IsActive = 0,
+                    JointCount = 26, //XR_HAND_JOINT_COUNT_EXT
+                    JointLocations = joint_locations_ptr,
+                };
+
+                locateHandJointsEXT.DynamicInvoke(leftHandTracker, new IntPtr(&hand_joints_locate_info), new IntPtr(&hand_joint_locations));
+
+                Logger.Warning("Left Hand: isActive " + hand_joint_locations.IsActive + " " + hand_joint_locations.JointCount + " joints.");
+            }
         }
 
         public override void Dispose()
