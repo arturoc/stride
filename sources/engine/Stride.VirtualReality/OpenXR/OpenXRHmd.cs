@@ -49,12 +49,9 @@ namespace Stride.VirtualReality
         private unsafe delegate Result pfnGetD3D11GraphicsRequirementsKHR(Instance instance, ulong sys_id, GraphicsRequirementsD3D11KHR* req);
 #endif
 
-        private unsafe delegate Result pfnxrCreateHandTrackerEXT(Session session, HandTrackerCreateInfoEXT* createInfo, HandTrackerEXT* handTracker);
-        private unsafe delegate Result pfnxrLocateHandJointsEXT(HandTrackerEXT handTracker, HandJointsLocateInfoEXT* locateInfo, HandJointLocationsEXT* locations);
         private unsafe delegate Result pfnCreateDebugUtilsMessengerEXT(Instance instance, DebugUtilsMessengerCreateInfoEXT* createInfo, DebugUtilsMessengerEXT* messenger);
         private unsafe delegate Result pfnDestroyDebugUtilsMessengerEXT(DebugUtilsMessengerEXT messenger);
 
-        private Delegate locateHandJointsEXT;
 
         private List<string> Extensions = new List<string>();
         internal bool begunFrame, swapImageCollected;
@@ -116,12 +113,6 @@ namespace Stride.VirtualReality
 
         public override TrackedItem[] TrackedItems => null;
 
-
-        private HandTrackerEXT leftHandTracker = new HandTrackerEXT();
-        private HandTrackerEXT rightHandTracker = new HandTrackerEXT();
-
-        private HandJointLocationEXT[] leftHandJointLocations = new HandJointLocationEXT[26];
-        private HandJointLocationEXT[] rightHandJointLocations = new HandJointLocationEXT[26];
 
         public OpenXRHmd(GraphicsDevice gd)
         {
@@ -290,7 +281,6 @@ namespace Stride.VirtualReality
             var getInfo = new SystemGetInfo(formFactor: FormFactor.HeadMountedDisplay) { Type = StructureType.TypeSystemGetInfo };
             CheckResult(Xr.GetSystem(Instance, in getInfo, ref system_id), "GetSystem");
             Logger.Warning("Successfully got XrSystem with id " + system_id + " for HMD form factor");
-
 
             SystemHandTrackingPropertiesEXT hand_tracking_props = new SystemHandTrackingPropertiesEXT()
             {
@@ -505,39 +495,6 @@ namespace Stride.VirtualReality
                 Next = null,
             };
             Xr.StringToPath(Instance, "/user/hand/left", ref leftHandPath);
-
-
-            Silk.NET.Core.PfnVoidFunction xrCreateHandTrackerEXT = new Silk.NET.Core.PfnVoidFunction();
-            CheckResult(Xr.GetInstanceProcAddr(Instance, "xrCreateHandTrackerEXT", ref xrCreateHandTrackerEXT), "GetInstanceProcAddr::xrCreateHandTrackerEXT");
-            Delegate hand_tracker = Marshal.GetDelegateForFunctionPointer((IntPtr)xrCreateHandTrackerEXT.Handle, typeof(pfnxrCreateHandTrackerEXT));
-
-            HandTrackerCreateInfoEXT left_hand_tracker_create_info = new HandTrackerCreateInfoEXT()
-            {
-                Type = StructureType.TypeHandTrackerCreateInfoExt,
-                Next = null,
-                Hand = HandEXT.HandLeftExt,
-                HandJointSet = HandJointSetEXT.HandJointSetDefaultExt,
-            };
-            HandTrackerEXT left_hand_tracker = new HandTrackerEXT();
-            var result = hand_tracker.DynamicInvoke(session, new IntPtr(&left_hand_tracker_create_info), new IntPtr(&left_hand_tracker));
-            CheckResult((Result)result, "xrCreateHandTrackerEXT");
-            leftHandTracker = left_hand_tracker;
-
-            HandTrackerCreateInfoEXT right_hand_tracker_create_info = new HandTrackerCreateInfoEXT()
-            {
-                Type = StructureType.TypeHandTrackerCreateInfoExt,
-                Next = null,
-                Hand = HandEXT.HandRightExt,
-                HandJointSet = HandJointSetEXT.HandJointSetDefaultExt,
-            };
-            HandTrackerEXT right_hand_tracker = new HandTrackerEXT();
-            hand_tracker.DynamicInvoke(session, new IntPtr(&right_hand_tracker_create_info), new IntPtr(&right_hand_tracker));
-            CheckResult((Result)result, "xrCreateHandTrackerEXT");
-            rightHandTracker = right_hand_tracker;
-
-            Silk.NET.Core.PfnVoidFunction xrLocateHandJointsEXT = new Silk.NET.Core.PfnVoidFunction();
-            CheckResult(Xr.GetInstanceProcAddr(Instance, "xrLocateHandJointsEXT", ref xrLocateHandJointsEXT), "GetInstanceProcAddr::xrLocateHandJointsEXT");
-            locateHandJointsEXT = Marshal.GetDelegateForFunctionPointer((IntPtr)xrLocateHandJointsEXT.Handle, typeof(pfnxrLocateHandJointsEXT));
         }
 
         private void EndNullFrame()
@@ -735,7 +692,8 @@ namespace Stride.VirtualReality
         public override void SetTrackingSpace(TrackingSpace space)
         {
             Logger.Warning("Changing tracking space to: " + space);
-            switch (space) {
+            switch (space)
+            {
                 case TrackingSpace.Seated:
                     play_space_type = ReferenceSpaceType.Local;
                     break;
@@ -1100,51 +1058,6 @@ namespace Stride.VirtualReality
             leftHand.Update(gameTime);
             rightHand.Update(gameTime);
 
-            HandJointsLocateInfoEXT hand_joints_locate_info = new HandJointsLocateInfoEXT()
-            {
-                Type = StructureType.TypeHandJointsLocateInfoExt,
-                Next = null,
-                BaseSpace = globalPlaySpace,
-                Time = globalFrameState.PredictedDisplayTime,
-            };
-            fixed (HandJointLocationEXT* joint_locations_ptr = leftHandJointLocations)
-            {
-                HandJointLocationsEXT hand_joint_locations = new HandJointLocationsEXT()
-                {
-                    Type = StructureType.TypeHandJointLocationsExt,
-                    Next = null,
-                    IsActive = 0,
-                    JointCount = 26, //XR_HAND_JOINT_COUNT_EXT
-                    JointLocations = joint_locations_ptr,
-                };
-
-                var result = locateHandJointsEXT.DynamicInvoke(leftHandTracker, new IntPtr(&hand_joints_locate_info), new IntPtr(&hand_joint_locations));
-                CheckResult((Result)result, "xrLocateHandJointsEXT");
-
-                if (hand_joint_locations.IsActive == 1)
-                {
-                    Logger.Warning("Left hand joint 0 position: " + leftHandJointLocations[0].Pose.Position.X + ", " + leftHandJointLocations[0].Pose.Position.Y + ", " + leftHandJointLocations[0].Pose.Position.Z);
-                }
-            }
-            fixed (HandJointLocationEXT* joint_locations_ptr = rightHandJointLocations)
-            {
-                HandJointLocationsEXT hand_joint_locations = new HandJointLocationsEXT()
-                {
-                    Type = StructureType.TypeHandJointLocationsExt,
-                    Next = null,
-                    IsActive = 0,
-                    JointCount = 26, //XR_HAND_JOINT_COUNT_EXT
-                    JointLocations = joint_locations_ptr,
-                };
-
-                var result = locateHandJointsEXT.DynamicInvoke(rightHandTracker, new IntPtr(&hand_joints_locate_info), new IntPtr(&hand_joint_locations));
-                CheckResult((Result)result, "xrLocateHandJointsEXT");
-
-                if (hand_joint_locations.IsActive == 1)
-                {
-                    Logger.Warning("Right hand joint 0 position: " + rightHandJointLocations[0].Pose.Position.X + ", " + rightHandJointLocations[0].Pose.Position.Y + ", " + rightHandJointLocations[0].Pose.Position.Z);
-                }
-            }
         }
 
         public override void Dispose()
@@ -1159,9 +1072,6 @@ namespace Stride.VirtualReality
             CheckResult(Xr.DestroySwapchain(globalSwapchain), "DestroySwapchain");
             CheckResult(Xr.DestroySession(globalSession), "DestroySession");
             CheckResult(Xr.DestroyInstance(Instance), "DestroyInstance");
-            //TODO
-            //xrDestroyHandTrackerEXT(leftHandTracker)
-            //xrDestroyHandTrackerEXT(rightHandTracker)
         }
     }
 }
