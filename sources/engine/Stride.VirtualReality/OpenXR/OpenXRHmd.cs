@@ -61,6 +61,8 @@ namespace Stride.VirtualReality
         // array of view_count containers for submitting swapchains with rendered VR frames
         CompositionLayerProjectionView[] projection_views;
         View[] views;
+        private unsafe CompositionLayerBaseHeader* [] compositionLayers = new CompositionLayerBaseHeader* [2];
+        private uint nextCompositionLayer = 0;
 
         public override Size2 ActualRenderFrameSize
         {
@@ -617,6 +619,16 @@ namespace Stride.VirtualReality
         }
 #endif
 
+
+        public unsafe void SetPassthroughLayer(IntPtr layer)
+        {
+            if (layer != IntPtr.Zero)
+            {
+                this.compositionLayers[0] = (CompositionLayerBaseHeader*)layer;
+                nextCompositionLayer = 1;
+            }
+        }
+
         public override void Commit(CommandList commandList, Texture renderFrame)
         {
             // if we didn't wait a frame, don't commit
@@ -649,23 +661,28 @@ namespace Stride.VirtualReality
 
                 unsafe
                 {
+                CompositionLayerProjection projectionLayer;
                 fixed (CompositionLayerProjectionView* projection_views_ptr = &projection_views[0])
                 {
-                    var projectionLayer = new CompositionLayerProjection
+                    projectionLayer = new CompositionLayerProjection
                     (
                         viewCount: (uint)projection_views.Length,
                         views: projection_views_ptr,
                         space: globalPlaySpace
                     );
 
-                    var layerPointer = (CompositionLayerBaseHeader*)&projectionLayer;
+                compositionLayers[nextCompositionLayer] = (CompositionLayerBaseHeader*)&projectionLayer;
+                nextCompositionLayer += 1;
+                fixed (CompositionLayerBaseHeader** compositionLayersPtr = &compositionLayers[0])
+                {
+                    var projectionLayerPtr = (CompositionLayerBaseHeader*)&projectionLayer;
                     var frameEndInfo = new FrameEndInfo()
                     {
                         Type = StructureType.TypeFrameEndInfo,
                         DisplayTime = globalFrameState.PredictedDisplayTime,
                         EnvironmentBlendMode = EnvironmentBlendMode.Opaque,
-                        LayerCount = 1,
-                        Layers = &layerPointer,
+                        LayerCount = nextCompositionLayer,
+                        Layers = compositionLayersPtr,
                         Next = null,
                     };
 
