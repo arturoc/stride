@@ -484,6 +484,7 @@ namespace Stride.VirtualReality
                 Next = null,
             };
             Xr.StringToPath(Instance, "/user/hand/left", ref leftHandPath);
+            nextCompositionLayer = 0;
         }
 
         private void EndNullFrame()
@@ -505,6 +506,7 @@ namespace Stride.VirtualReality
             if (!runFramecycle || !sessionRunning)
             {
                 begunFrame = false;
+                nextCompositionLayer = 0;
                 return;
             }
 
@@ -543,6 +545,7 @@ namespace Stride.VirtualReality
                 EndNullFrame();
                 begunFrame = false;
             }
+            nextCompositionLayer = 0;
         }
 
         public void UpdateViews()
@@ -632,8 +635,10 @@ namespace Stride.VirtualReality
         public override void Commit(CommandList commandList, Texture renderFrame)
         {
             // if we didn't wait a frame, don't commit
-            if (begunFrame == false)
+            if (begunFrame == false) {
+                nextCompositionLayer = 0;
                 return;
+            }
 
             begunFrame = false;
 
@@ -694,6 +699,7 @@ namespace Stride.VirtualReality
             {
                 EndNullFrame();
             }
+            nextCompositionLayer = 0;
         }
 
 
