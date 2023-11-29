@@ -675,7 +675,6 @@ namespace Stride.VirtualReality
                 nextCompositionLayer += 1;
                 fixed (CompositionLayerBaseHeader** compositionLayersPtr = &compositionLayers[0])
                 {
-                    var projectionLayerPtr = (CompositionLayerBaseHeader*)&projectionLayer;
                     var frameEndInfo = new FrameEndInfo()
                     {
                         Type = StructureType.TypeFrameEndInfo,
